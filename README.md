@@ -1,3 +1,14 @@
+---
+title: NovaSearch
+emoji: 🔍
+colorFrom: blue
+colorTo: purple
+sdk: docker
+sdk_version: "0.0.1"
+app_file: Dockerfile
+pinned: false
+---
+
 # Local AI Search Engine (Google-like UI)
 
 This project is a **from-scratch search engine and mini web browser** built in the `LA` directory. It combines:

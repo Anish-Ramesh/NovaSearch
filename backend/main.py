@@ -2,11 +2,15 @@ from typing import List, Literal, Optional
 import asyncio
 import time
 import json
+import os
 
 from urllib.parse import quote as url_quote
+from pathlib import Path
 
+import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from duckduckgo_search import DDGS
@@ -73,12 +77,12 @@ class ImageSearchResponse(BaseModel):
 
 
 def build_llm() -> ChatOpenAI:
-    """Configure LM Studio as an OpenAI-compatible Chat model for LangChain."""
+    """(Deprecated) Old LM Studio client kept for reference; not used now."""
 
     return ChatOpenAI(
-        model="local-model",  # Name doesn't have to match exactly; LM Studio uses the loaded model
+        model="local-model",
         base_url="http://localhost:1234/v1",
-        api_key="lm-studio",  # Dummy key, LM Studio does not validate it
+        api_key="lm-studio",
         temperature=0.4,
     )
 
@@ -91,6 +95,46 @@ duckduckgo_wrapper = DuckDuckGoSearchAPIWrapper(
 )
 
 web_search_tool = DuckDuckGoSearchRun(api_wrapper=duckduckgo_wrapper)
+
+
+HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+
+
+def call_qwen_router(prompt: str) -> str:
+    """Call Qwen3-Coder via Hugging Face router using HF_TOKEN env var.
+
+    The prompt should already contain instructions to respond as JSON
+    with keys: final_answer, key_takeaways, followups.
+    """
+
+    token = os.getenv("HF_TOKEN")
+    if not token:
+        return "{\n  \"final_answer\": \"HF_TOKEN not set. Please configure it in the environment.\",\n  \"key_takeaways\": [],\n  \"followups\": []\n}"
+
+    try:
+        response = requests.post(
+            HF_ROUTER_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct:nebius",
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:  # pragma: no cover - defensive
+        return (
+            "{\n  \"final_answer\": \"Qwen router call failed: "
+            + str(e).replace("\"", "'")
+            + "\",\n  \"key_takeaways\": [],\n  \"followups\": []\n}"
+        )
 
 
 async def run_reflexive_search(query: str, mode: str, max_results: int) -> SearchResponse:
@@ -124,9 +168,7 @@ async def run_reflexive_search(query: str, mode: str, max_results: int) -> Searc
             )
         )
 
-    # 2) Ask LM Studio model to summarize and suggest follow-ups
-    critique_llm = build_llm()
-
+    # 2) Ask Qwen3 via Hugging Face router to summarize and suggest follow-ups
     critique_prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -147,20 +189,22 @@ async def run_reflexive_search(query: str, mode: str, max_results: int) -> Searc
     critique_msgs = critique_prompt.format_messages(
         query=query, evidence=evidence_concat or "(no web evidence available)"
     )
-    critique_resp = critique_llm.invoke(critique_msgs)
+    # Flatten LangChain messages into a single prompt string
+    prompt_text = "\n\n".join(getattr(m, "content", str(m)) for m in critique_msgs)
+    critique_content = call_qwen_router(prompt_text)
 
     final_answer = ""
     key_takeaways: List[str] = []
     followups: List[str] = []
 
     try:
-        data = json.loads(critique_resp.content)
+        data = json.loads(critique_content)
         final_answer = data.get("final_answer", "") or ""
         key_takeaways = data.get("key_takeaways", []) or []
         followups = data.get("followups", []) or []
     except Exception:
         # If the model did not return valid JSON, just use raw text
-        final_answer = getattr(critique_resp, "content", str(critique_resp))
+        final_answer = critique_content
 
     latency_ms = int((time.time() - start_time) * 1000)
     refined_query = query
@@ -189,17 +233,24 @@ async def web_search(req: SearchRequest) -> WebSearchResponse:
     start_time = time.time()
     loop = asyncio.get_event_loop()
 
-    def _run_results(q: str, limit: int):
+    def _run_results(q: str, limit: int, region: str):
         # Use duckduckgo_search; pass region to the text() call (constructor has no region param)
-        # in-en matches your India+English browser settings more closely
         with DDGS() as ddgs:
-            return list(ddgs.text(q, max_results=limit, region="in-en"))
+            return list(ddgs.text(q, max_results=limit, region=region))
 
     limit = max(req.max_results, 10)
     results: List[SearchResult] = []
 
     try:
-        raw_list = await loop.run_in_executor(None, lambda: _run_results(req.query, limit))
+        # First try India+English to match your browser; if that returns nothing,
+        # fall back to a global region for better coverage.
+        raw_list = await loop.run_in_executor(
+            None, lambda: _run_results(req.query, limit, "in-en")
+        )
+        if not raw_list:
+            raw_list = await loop.run_in_executor(
+                None, lambda: _run_results(req.query, limit, "wt-wt")
+            )
         blocked_hosts = ["zhihu.com", "baidu.com", ".cn", "jeuxvideo.com"]
 
         filtered: List[SearchResult] = []
