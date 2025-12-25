@@ -352,3 +352,9 @@ async def image_search(req: SearchRequest) -> ImageSearchResponse:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+# Serve built frontend (frontend/dist) when present – useful for Docker/Hugging Face deployment
+# Mount after API routes so /search, /web_search, /image_search are handled first
+FRONTEND_DIST = (Path(__file__).resolve().parent.parent / "frontend" / "dist").resolve()
+if FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
