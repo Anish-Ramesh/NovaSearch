@@ -235,8 +235,14 @@ async def web_search(req: SearchRequest) -> WebSearchResponse:
 
     def _run_results(q: str, limit: int, region: str):
         # Use duckduckgo_search; pass region to the text() call (constructor has no region param)
-        with DDGS() as ddgs:
-            return list(ddgs.text(q, max_results=limit, region=region))
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(q, max_results=limit, region=region))
+                print(f"DDGS results for '{q}' region '{region}': {len(results)} items")
+                return results
+        except Exception as e:
+            print(f"DDGS error for region '{region}': {e}")
+            return []
 
     limit = max(req.max_results, 10)
     results: List[SearchResult] = []
@@ -250,6 +256,11 @@ async def web_search(req: SearchRequest) -> WebSearchResponse:
         if not raw_list:
             raw_list = await loop.run_in_executor(
                 None, lambda: _run_results(req.query, limit, "wt-wt")
+            )
+        if not raw_list:
+            # Last resort: try without region
+            raw_list = await loop.run_in_executor(
+                None, lambda: _run_results(req.query, limit, None)
             )
         blocked_hosts = ["zhihu.com", "baidu.com", ".cn", "jeuxvideo.com"]
 
