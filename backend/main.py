@@ -3,6 +3,7 @@ import asyncio
 import time
 import json
 import os
+import random
 
 from urllib.parse import quote as url_quote
 from pathlib import Path
@@ -236,8 +237,13 @@ async def web_search(req: SearchRequest) -> WebSearchResponse:
     def _run_results(q: str, limit: int, region: str):
         # Use duckduckgo_search; pass region to the text() call (constructor has no region param)
         try:
+            # Add random delay to avoid rate limiting
+            time.sleep(random.uniform(0.5, 1.5))
             with DDGS() as ddgs:
-                results = list(ddgs.text(q, max_results=limit, region=region))
+                if region:
+                    results = list(ddgs.text(q, max_results=limit, region=region))
+                else:
+                    results = list(ddgs.text(q, max_results=limit))
                 print(f"DDGS results for '{q}' region '{region}': {len(results)} items")
                 return results
         except Exception as e:
@@ -262,6 +268,22 @@ async def web_search(req: SearchRequest) -> WebSearchResponse:
             raw_list = await loop.run_in_executor(
                 None, lambda: _run_results(req.query, limit, None)
             )
+        
+        # If DuckDuckGo still returns nothing due to rate limiting, provide fallback results
+        if not raw_list:
+            print("DuckDuckGo rate limited, providing fallback results")
+            raw_list = [
+                {
+                    "title": f"{req.query} - Search Results",
+                    "href": f"https://www.google.com/search?q={url_quote(req.query)}",
+                    "body": f"DuckDuckGo is temporarily rate limited. Click here to search for '{req.query}' on Google."
+                },
+                {
+                    "title": f"{req.query} - Wikipedia",
+                    "href": f"https://en.wikipedia.org/wiki/Special:Search/{url_quote(req.query)}",
+                    "body": f"Search for '{req.query}' on Wikipedia for comprehensive information."
+                }
+            ]
         blocked_hosts = ["zhihu.com", "baidu.com", ".cn", "jeuxvideo.com"]
 
         filtered: List[SearchResult] = []
