@@ -112,7 +112,7 @@ const App: React.FC = () => {
 
     // 1) Fast web results
     axios
-      .post<WebSearchResponse>('http://localhost:8000/web_search', {
+      .post<WebSearchResponse>('/web_search', {
         query: effectiveQuery,
         mode: currentMode,
         max_results: 6,
@@ -130,7 +130,7 @@ const App: React.FC = () => {
 
     // 2) AI answer in background
     axios
-      .post<SearchResponse>('http://localhost:8000/search', {
+      .post<SearchResponse>('/search', {
         query: effectiveQuery,
         mode: currentMode,
         max_results: 6,
@@ -148,7 +148,7 @@ const App: React.FC = () => {
 
     // 3) Image search in background
     axios
-      .post<ImageSearchResponse>('http://localhost:8000/image_search', {
+      .post<ImageSearchResponse>('/image_search', {
         query: effectiveQuery,
         mode: currentMode,
         max_results: 12,
