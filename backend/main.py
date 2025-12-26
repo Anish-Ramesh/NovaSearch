@@ -102,8 +102,10 @@ def call_tavily_search(query: str, max_results: int = 10) -> List[dict]:
     """Call Tavily API for search results."""
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
+        print("Tavily API key not found in environment")
         return []
     
+    print(f"Calling Tavily API for query: '{query}'")
     try:
         response = requests.post(
             "https://api.tavily.com/search",
@@ -126,6 +128,7 @@ def call_tavily_search(query: str, max_results: int = 10) -> List[dict]:
                 "href": result.get("url", ""),
                 "body": result.get("content", "") or result.get("snippet", "")
             })
+        print(f"Tavily API returned {len(results)} results")
         return results
     except Exception as e:
         print(f"Tavily API error: {e}")
