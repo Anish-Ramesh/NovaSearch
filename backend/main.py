@@ -113,22 +113,40 @@ def call_tavily_search(query: str, max_results: int = 10) -> List[dict]:
                 "api_key": api_key,
                 "query": query,
                 "max_results": max_results,
-                "search_depth": "basic"
+                "search_depth": "basic",
+                "include_answer": False,
+                "include_raw_content": False,
+                "include_domains": [],  # Allow all domains
+                "exclude_domains": ["answers.ea.com"],  # Exclude non-English gaming forums
+                "topic": "general"
             },
             timeout=10
         )
         response.raise_for_status()
         data = response.json()
         
-        # Convert Tavily results to our format
+        # Convert Tavily results to our format and filter for English content
         results = []
         for result in data.get("results", []):
-            results.append({
-                "title": result.get("title", ""),
-                "href": result.get("url", ""),
-                "body": result.get("content", "") or result.get("snippet", "")
-            })
-        print(f"Tavily API returned {len(results)} results")
+            title = result.get("title", "")
+            content = result.get("content", "") or result.get("snippet", "")
+            
+            # Basic English language detection - check for common English words
+            english_indicators = ["the", "and", "is", "are", "of", "in", "to", "a", "that", "it", "with", "for", "as", "on", "be", "at", "by", "this", "have", "from"]
+            content_lower = content.lower()
+            
+            # Check if content has enough English indicators
+            english_score = sum(1 for word in english_indicators if word in content_lower)
+            is_english = english_score >= 3  # At least 3 common English words
+            
+            if is_english or len(content) < 50:  # Allow short snippets too
+                results.append({
+                    "title": title,
+                    "href": result.get("url", ""),
+                    "body": content
+                })
+        
+        print(f"Tavily API returned {len(results)} English results")
         return results
     except Exception as e:
         print(f"Tavily API error: {e}")
