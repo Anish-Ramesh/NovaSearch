@@ -98,7 +98,38 @@ duckduckgo_wrapper = DuckDuckGoSearchAPIWrapper(
 web_search_tool = DuckDuckGoSearchRun(api_wrapper=duckduckgo_wrapper)
 
 
-HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+def call_tavily_search(query: str, max_results: int = 10) -> List[dict]:
+    """Call Tavily API for search results."""
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return []
+    
+    try:
+        response = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": "basic"
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Convert Tavily results to our format
+        results = []
+        for result in data.get("results", []):
+            results.append({
+                "title": result.get("title", ""),
+                "href": result.get("url", ""),
+                "body": result.get("content", "") or result.get("snippet", "")
+            })
+        return results
+    except Exception as e:
+        print(f"Tavily API error: {e}")
+        return []
 
 
 def call_qwen_router(prompt: str) -> str:
@@ -136,6 +167,9 @@ def call_qwen_router(prompt: str) -> str:
             + str(e).replace("\"", "'")
             + "\",\n  \"key_takeaways\": [],\n  \"followups\": []\n}"
         )
+
+
+HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
 
 
 async def run_reflexive_search(query: str, mode: str, max_results: int) -> SearchResponse:
@@ -254,34 +288,39 @@ async def web_search(req: SearchRequest) -> WebSearchResponse:
     results: List[SearchResult] = []
 
     try:
-        # First try India+English to match your browser; if that returns nothing,
-        # fall back to a global region for better coverage.
-        raw_list = await loop.run_in_executor(
-            None, lambda: _run_results(req.query, limit, "in-en")
-        )
-        if not raw_list:
-            raw_list = await loop.run_in_executor(
-                None, lambda: _run_results(req.query, limit, "wt-wt")
-            )
-        if not raw_list:
-            # Last resort: try without region
-            raw_list = await loop.run_in_executor(
-                None, lambda: _run_results(req.query, limit, None)
-            )
+        # 1) Try Tavily API first (best results)
+        raw_list = call_tavily_search(req.query, limit)
+        if raw_list:
+            print(f"Using Tavily results: {len(raw_list)} items")
         
-        # If DuckDuckGo still returns nothing due to rate limiting, provide fallback results
+        # 2) Fallback to DuckDuckGo if Tavily fails
         if not raw_list:
-            print("DuckDuckGo rate limited, providing fallback results")
+            print("Tavily failed, trying DuckDuckGo...")
+            raw_list = await loop.run_in_executor(
+                None, lambda: _run_results(req.query, limit, "in-en")
+            )
+            if not raw_list:
+                raw_list = await loop.run_in_executor(
+                    None, lambda: _run_results(req.query, limit, "wt-wt")
+                )
+            if not raw_list:
+                raw_list = await loop.run_in_executor(
+                    None, lambda: _run_results(req.query, limit, None)
+                )
+        
+        # 3) Final fallback to helpful links if both fail
+        if not raw_list:
+            print("Both search APIs failed, providing fallback results")
             raw_list = [
                 {
-                    "title": f"{req.query} - Search Results",
+                    "title": f"{req.query} - Google Search",
                     "href": f"https://www.google.com/search?q={url_quote(req.query)}",
-                    "body": f"DuckDuckGo is temporarily rate limited. Click here to search for '{req.query}' on Google."
+                    "body": f"Search for '{req.query}' on Google for comprehensive results."
                 },
                 {
                     "title": f"{req.query} - Wikipedia",
                     "href": f"https://en.wikipedia.org/wiki/Special:Search/{url_quote(req.query)}",
-                    "body": f"Search for '{req.query}' on Wikipedia for comprehensive information."
+                    "body": f"Search for '{req.query}' on Wikipedia for detailed information."
                 }
             ]
         blocked_hosts = ["zhihu.com", "baidu.com", ".cn", "jeuxvideo.com"]
